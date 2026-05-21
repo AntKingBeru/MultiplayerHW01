@@ -140,6 +140,8 @@ public class LobbyUIController : MonoBehaviour
             var item = Instantiate(playerListItemPrefab, playerListContent);
             item.GetComponent<PlayerListItem>().Populate(rp);
         }
+        
+        LayoutRebuilder.ForceRebuildLayoutImmediate(playerListContent as RectTransform);
     }
 
     /// <summary>
@@ -148,9 +150,20 @@ public class LobbyUIController : MonoBehaviour
     public void RefreshStartButton()
     {
         var isHost = FusionLobbyManager.Instance && FusionLobbyManager.Instance.IsHost;
-        var allReady = _activePlayers.Count > 1 && _activePlayers.TrueForAll(p => p.IsReady);
         startGameButton.gameObject.SetActive(isHost);
-        startGameButton.interactable = isHost && allReady;
+        
+        if (!isHost)
+            return;
+        
+        var nonHostPlayers = _activePlayers.FindAll(p => p.IsHost == false);
+        
+        var hasOtherPlayers = nonHostPlayers.Count > 0;
+        var allReady = hasOtherPlayers && nonHostPlayers.TrueForAll(p => p.IsReady == true);
+        
+        startGameButton.interactable = allReady;
+        
+        Debug.Log($"[UI] Start button: nonHostPlayers={nonHostPlayers.Count}, " +
+                  $"allReady={allReady}");
     }
     #endregion
     
@@ -166,6 +179,8 @@ public class LobbyUIController : MonoBehaviour
 
     private void HandleDisconnectedFromLobby()
     {
+        _activePlayers.Clear();
+        RefreshPlayerList();
         ShowPanel(mainMenuPanel);
         SetMainMenuButtons(true);
         mainStatusText.text = "Disconnected.";
@@ -183,6 +198,7 @@ public class LobbyUIController : MonoBehaviour
             item.GetComponent<RoomListItem>().Populate(session, OnRoomListItemJoinClicked);
         }
 
+        LayoutRebuilder.ForceRebuildLayoutImmediate(roomListContent as RectTransform);
         Debug.Log($"[UI] Room list refreshed: {sessions.Count} room(s).");
     }
 
@@ -281,6 +297,16 @@ public class LobbyUIController : MonoBehaviour
         // Guard: only host can reach this (button is host-only)
         if (!FusionLobbyManager.Instance.IsHost)
             return;
+        
+        var nonHostPlayers = _activePlayers.FindAll(p => p.IsHost == false);
+        var allReady = nonHostPlayers.Count > 0 && nonHostPlayers.TrueForAll(p => p.IsReady);
+        
+        if (!allReady)
+        {
+            Debug.LogWarning("[UI] Start blocked — not all players are ready.");
+            return;
+        }
+
         FusionLobbyManager.Instance.StartGame();
     }
 

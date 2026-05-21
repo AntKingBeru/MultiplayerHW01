@@ -14,14 +14,16 @@ public class RoomPlayer : NetworkBehaviour
 
     public override void Spawned()
     {
+        LobbyUIController.Instance?.RegisterPlayer(this);
+        
         if (HasInputAuthority)
         {
-            PlayerName = FusionLobbyManager.Instance.LocalPlayerName;
-            IsHost = Runner.IsServer;
-            Debug.Log($"[RoomPlayer] Spawned as '{PlayerName}', IsHost={IsHost}");
+            RPC_SetPlayerInfo(
+                FusionLobbyManager.Instance.LocalPlayerName,
+                Runner.IsServer
+            );
+            Debug.Log($"[RoomPlayer] Spawned locally, sent info to host.");
         }
-        
-        LobbyUIController.Instance?.RegisterPlayer(this);
         
         _prevName = PlayerName;
         _prevReady = IsReady;
@@ -65,6 +67,14 @@ public class RoomPlayer : NetworkBehaviour
             LobbyUIController.Instance?.RefreshPlayerList();
             LobbyUIController.Instance?.RefreshStartButton();
         }
+    }
+    
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_SetPlayerInfo(string playerName, bool isHost)
+    {
+        PlayerName = playerName;
+        IsHost     = isHost;
+        Debug.Log($"[RoomPlayer] Host received player info: '{playerName}', IsHost={isHost}");
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
