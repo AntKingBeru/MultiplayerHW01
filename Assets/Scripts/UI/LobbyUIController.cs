@@ -191,6 +191,8 @@ public class LobbyUIController : MonoBehaviour
         // Clear old room list rows
         foreach (Transform child in roomListContent)
             Destroy(child.gameObject);
+        
+        Debug.Log($"Session: {sessions.Count}");
 
         foreach (var session in sessions)
         {
@@ -289,7 +291,7 @@ public class LobbyUIController : MonoBehaviour
         
         // Find our own RoomPlayer and send RPC to update networked state
         var myPlayer = FindMyRoomPlayer();
-        myPlayer?.RPC_SetReady(_isReady);
+        myPlayer?.SetReady(_isReady);
     }
 
     private void OnStartGameClicked()

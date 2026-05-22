@@ -50,28 +50,37 @@ public class FusionLobbyManager : MonoBehaviour, INetworkRunnerCallbacks
         LocalPlayerName = string.IsNullOrWhiteSpace(playerName) ? "Player" : playerName;
         Debug.Log($"[Lobby] Connecting as '{LocalPlayerName}'...");
 
-        await RecreateRunnerAsync();
+        if (Runner)
+        {
+            Runner.RemoveCallbacks(this);
+            await Runner.Shutdown(destroyGameObject: true);
+            Runner = null;
+        }
         
+        var runnerGo = new GameObject("NetworkRunner");
+        DontDestroyOnLoad(runnerGo);
+        Runner = runnerGo.AddComponent<NetworkRunner>();
+        Runner.ProvideInput = true;
+        Runner.AddCallbacks(this);
+
         var result = await Runner.StartGame(new StartGameArgs
         {
-            GameMode = GameMode.AutoHostOrClient,
-            SessionName = $"_lobby_{Guid.NewGuid():N}",
+            GameMode = GameMode.Shared,
+            SessionName = null,
             CustomLobbyName = DefaultLobbyName,
-            IsOpen = false,
-            IsVisible = false,
             Scene = null,
             SceneManager = null,
         });
-
+        
         if (result.Ok)
         {
-            Debug.Log("[Lobby] Connected to Photon lobby, session list active.");
+            Debug.Log("[Lobby] Connected. Listening for sessions...");
             OnConnectedToLobby?.Invoke();
         }
         else
         {
-            Debug.LogError($"[Lobby] Connection failed: {result.ShutdownReason}");
-            OnError?.Invoke($"Connection failed: {result.ShutdownReason}");
+            Debug.LogError($"[Lobby] Connect failed: {result.ShutdownReason}");
+            OnError?.Invoke($"Connect failed: {result.ShutdownReason}");
         }
     }
     
@@ -81,22 +90,34 @@ public class FusionLobbyManager : MonoBehaviour, INetworkRunnerCallbacks
     /// </summary>
     public async Task CreateRoomAsync(string roomName, int maxPlayers)
     {
-        Debug.Log($"[Lobby] Creating room '{roomName}' (max {maxPlayers})...");
         maxPlayers = Mathf.Clamp(maxPlayers, 2, 6);
 
-        await RecreateRunnerAsync(); // ← add this
+        if (Runner)
+        {
+            Runner.RemoveCallbacks(this);
+            await Runner.Shutdown(destroyGameObject: true);
+            Runner = null;
+        }
+
+        var runnerGo = new GameObject("NetworkRunner");
+        DontDestroyOnLoad(runnerGo);
+        Runner = runnerGo.AddComponent<NetworkRunner>();
+        Runner.ProvideInput = true;
+        Runner.AddCallbacks(this);
 
         var result = await Runner.StartGame(new StartGameArgs
         {
-            GameMode = GameMode.Host,
+            GameMode = GameMode.Shared,
             SessionName = roomName,
             PlayerCount = maxPlayers,
             CustomLobbyName = DefaultLobbyName,
+            Scene  = null,
+            SceneManager = null,
         });
 
         if (result.Ok)
         {
-            Debug.Log($"[Lobby] Room '{roomName}' created. You are the host.");
+            Debug.Log($"[Lobby] Room '{roomName}' created. MasterClient={Runner.IsSharedModeMasterClient}");
             OnJoinedRoom?.Invoke(roomName);
         }
         else
@@ -113,13 +134,26 @@ public class FusionLobbyManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         Debug.Log($"[Lobby] Joining room '{roomName}'...");
 
-        await RecreateRunnerAsync(); // ← add this
+        if (Runner)
+        {
+            Runner.RemoveCallbacks(this);
+            await Runner.Shutdown(destroyGameObject: true);
+            Runner = null;
+        }
+
+        var runnerGo = new GameObject("NetworkRunner");
+        DontDestroyOnLoad(runnerGo);
+        Runner = runnerGo.AddComponent<NetworkRunner>();
+        Runner.ProvideInput = true;
+        Runner.AddCallbacks(this);
 
         var result = await Runner.StartGame(new StartGameArgs
         {
-            GameMode = GameMode.Client,
+            GameMode = GameMode.Shared,
             SessionName = roomName,
             CustomLobbyName = DefaultLobbyName,
+            Scene  = null,
+            SceneManager = null,
         });
 
         if (result.Ok)
@@ -172,15 +206,14 @@ public class FusionLobbyManager : MonoBehaviour, INetworkRunnerCallbacks
             return;
         }
         Debug.Log("[Lobby] Host is starting the game!");
-        // TODO: Load game scene here, e.g.:
-        // Runner.LoadScene(SceneRef.FromIndex(gameSceneBuildIndex));
+        // TODO: Runner.LoadScene(SceneRef.FromIndex(gameSceneBuildIndex));
     }
     #endregion
     
     #region INetworkRunnerCallbacks
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
-        if (runner.IsServer)
+        if (player == runner.LocalPlayer)
         {
             var obj = runner.Spawn(
                 roomPlayerPrefab,
@@ -193,6 +226,11 @@ public class FusionLobbyManager : MonoBehaviour, INetworkRunnerCallbacks
             Debug.Log($"[Room] Player {player.PlayerId} joined. " +
                       $"Total: {runner.SessionInfo.PlayerCount}");
         }
+        else
+        {
+            Debug.Log($"[Room] Remote player {player.PlayerId} joined. " +
+                      $"Total: {runner.SessionInfo.PlayerCount}");
+        }
     }
 
     public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
@@ -201,7 +239,7 @@ public class FusionLobbyManager : MonoBehaviour, INetworkRunnerCallbacks
         {
                 Debug.Log($"[Room] '{roomPlayer.PlayerName}' left the room.");
                 
-                if (runner.IsServer)
+                if (roomPlayer.HasStateAuthority)
                     runner.Despawn(roomPlayer.Object);
                 
                 _spawnedPlayers.Remove(player);
@@ -212,8 +250,13 @@ public class FusionLobbyManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList)
     {
-        Debug.Log($"[Lobby] Session list updated: {sessionList.Count} session(s).");
-        OnSessionListUpdate?.Invoke(sessionList);
+        Debug.Log($"[Lobby] RAW session list count: {sessionList.Count}");
+        foreach (var s in sessionList)
+            Debug.Log($"[Lobby] Session: '{s.Name}' | Open={s.IsOpen} | Visible={s.IsVisible} | Players={s.PlayerCount}/{s.MaxPlayers}");
+        
+        var visibleSessions = sessionList.FindAll(s => s.IsVisible && s.IsOpen);
+        Debug.Log($"[Lobby] Session list updated: {visibleSessions.Count} session(s).");
+        OnSessionListUpdate?.Invoke(visibleSessions);
     }
     
     public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
@@ -254,20 +297,4 @@ public class FusionLobbyManager : MonoBehaviour, INetworkRunnerCallbacks
     public void OnHostMigration(NetworkRunner runner, HostMigrationToken hostMigrationToken) { }
     public void OnUserSimulationMessage(NetworkRunner runner, SimulationMessagePtr message) { }
     #endregion
-
-    private async Task RecreateRunnerAsync()
-    {
-        if (Runner)
-        {
-            Runner.RemoveCallbacks(this);
-            await Runner.Shutdown(destroyGameObject: true);
-            Runner = null;
-        }
-        
-        var runnerObject = new GameObject("NetworkRunner");
-        DontDestroyOnLoad(runnerObject);
-        Runner = runnerObject.AddComponent<NetworkRunner>();
-        Runner.ProvideInput = true;
-        Runner.AddCallbacks(this);
-    }
 }
